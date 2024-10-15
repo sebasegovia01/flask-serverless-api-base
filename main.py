@@ -1,24 +1,21 @@
-from flask import Flask, jsonify, Request
+from flask import Flask, Request
 import functions_framework
+from routes.routes import register_routes
 import serverless_wsgi
 
 app = Flask(__name__)
 
+# all routes
+register_routes(app)
 
 # cloud function
 @functions_framework.http
 def hello_http(request: Request):
-    return jsonify(message="Hello, World!")
+    return app(request.environ, lambda x, y: None)
 
-# lambda call all flask routes defined
+# lambda / handle al request to reoutes
 def handler(event, context):
     return serverless_wsgi.handle_request(app, event, context)
-
-# generic & lambda
-@app.route('/', methods=['GET'])
-def hello_http_flask():
-    return jsonify(message="Hello, World!")
-
 
 if __name__ == '__main__':
     app.run(debug=True)

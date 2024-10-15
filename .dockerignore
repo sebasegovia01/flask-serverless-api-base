@@ -4,3 +4,5 @@ __pycache__/
 .serverless/
 .gitignore
 .dockerignore
+.zip
+.DS_Store
