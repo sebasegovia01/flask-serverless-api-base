@@ -1,0 +1,6 @@
+#.dockerignore
+__pycache__/
+.git/
+.serverless/
+.gitignore
+.dockerignore

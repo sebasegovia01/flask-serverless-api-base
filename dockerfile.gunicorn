@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the requirements file into the container
+COPY requirements.txt ./
+
+# Install the dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application code
+COPY . .
+
+# Set the environment variable to use the correct port
+ENV PORT=8080
+
+# Expose the port the application will run on
+EXPOSE 8080
+
+# Run the application using Gunicorn
+CMD [ "gunicorn", "-b", ":8080", "app:app" ]
