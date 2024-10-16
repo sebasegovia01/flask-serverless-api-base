@@ -14,3 +14,5 @@ def register_routes(app: Flask):
                      msg_broker_controller.get_pubsub_topic, methods=['GET'])
     app.add_url_rule('/pubsub/topics', 'update_pubsub_topic', 
                      msg_broker_controller.update_pubsub_topic, methods=['PUT'])
+    app.add_url_rule('/pubsub/subscriptions', 'delete_pubsub_subscription', 
+                     msg_broker_controller.delete_pubsub_subscription, methods=['DELETE'])

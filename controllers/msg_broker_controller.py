@@ -21,19 +21,24 @@ def create_pubsub_topic() -> Tuple[Response, int]:
 
 def delete_pubsub_topic() -> Tuple[Response, int]:
     data = request.json
-    if "topic_name" not in data:
-        return (
-            jsonify(
-                {"status": "error", "message": "Invalid payload, missing topic name"}
-            ),
-            400,
-        )
+    if not data or "topic_name" not in data:
+        return jsonify({"status": "error", "message": "Invalid payload, missing topic name"}), 400
 
     topic_name = data["topic_name"]
+    delete_subscriptions = data.get("delete_subscriptions")
 
-    result = pubsub_creator_service.delete_pubsub_topic(topic_name)
+    result = pubsub_creator_service.delete_pubsub_topic(topic_name, delete_subscriptions)
     return jsonify(result), 200 if result["status"] == "success" else 500
 
+def delete_pubsub_subscription() -> Tuple[Response, int]:
+    data = request.json
+    if not data or "subscription_name" not in data:
+        return jsonify({"status": "error", "message": "Invalid payload, missing subscription name"}), 400
+
+    subscription_name = data["subscription_name"]
+
+    result = pubsub_creator_service.delete_pubsub_subscription(subscription_name)
+    return jsonify(result), 200 if result["status"] == "success" else 500
 
 def list_pubsub_topics() -> Tuple[Response, int]:
     result = pubsub_creator_service.list_pubsub_topics()
