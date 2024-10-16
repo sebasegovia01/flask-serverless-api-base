@@ -1,7 +1,7 @@
 # services/pubsub_service.py
 import logging
 import re
-from typing import Any, List, Optional
+from typing import List, Optional
 from google.cloud import pubsub_v1
 from google.api_core import retry, exceptions
 from google.oauth2 import service_account
