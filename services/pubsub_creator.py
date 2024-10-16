@@ -1,108 +1,162 @@
-# app/services/pubsub_service.py
+# services/pubsub_service.py
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from google.cloud import pubsub_v1
-from google.api_core import retry
+from google.api_core import retry, exceptions
 from google.oauth2 import service_account
 from google.protobuf import field_mask_pb2, duration_pb2
-from config.config import Config
+from models.pubsub_models import *
 
 
 class PubSubCreatorService:
-    def __init__(self) -> None:
+    def __init__(self, credentials: PubSubCredentials) -> None:
         logging.info("Initializing PubSubCreator service...")
         try:
-            credentials = service_account.Credentials.from_service_account_info(
-                Config.get_gcp_credentials()
+            self.credentials = service_account.Credentials.from_service_account_info(
+                credentials.credentials
             )
-            self.publisher = pubsub_v1.PublisherClient(credentials=credentials)
-            self.subscriber = pubsub_v1.SubscriberClient(credentials=credentials)
+            self.publisher = pubsub_v1.PublisherClient(credentials=self.credentials)
+            self.subscriber = pubsub_v1.SubscriberClient(credentials=self.credentials)
             self.project_id = credentials.project_id
             print("PubSubCreator service initialized successfully.")
         except Exception as e:
             error_message = f"Failed to initialize PubSubCreator service: {str(e)}"
-            print(error_message)
             logging.error(error_message)
             self.publisher = None
+            self.subscriber = None
+            self.project_id = None
 
     @retry.Retry()
-    def create_pubsub_topic(
-        self, project_id, topic_name, labels=None
-    ) -> dict[str, str]:
-        topic_path = self.publisher.topic_path(project_id, topic_name)
+    def create_pubsub_topic(self, topic_create: TopicCreate) -> TopicCreateResponse:
+        topic_path = self.publisher.topic_path(
+            topic_create.project_id, topic_create.topic_name
+        )
 
         try:
             topic = self.publisher.create_topic(
                 request={
                     "name": topic_path,
-                    "labels": labels or {},
+                    "labels": topic_create.labels or {},
                 }
             )
-            return {
-                "status": "success",
-                "message": f"Topic created: {topic.name}",
-                "topic_path": topic.name,
-            }
+            return TopicCreateResponse(
+                status="success",
+                message=f"Topic created: {topic.name}",
+                topic_path=topic.name,
+            )
         except Exception as e:
             error_message = f"Failed to create topic: {str(e)}"
             logging.error(error_message)
-            return {"status": "error", "message": error_message}
+            return TopicCreateResponse(
+                status="error", message=error_message, topic_path=""
+            )
 
-    def delete_pubsub_topic(
-        self, topic_name: str, delete_subscriptions: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+    def delete_pubsub_topic(self, topic_delete: TopicDelete) -> TopicDeleteResponse:
         if not self.publisher or not self.subscriber:
-            return {"status": "error", "message": "PubSub service not initialized"}
+            return TopicDeleteResponse(
+                status="error", message="PubSub service not initialized"
+            )
 
-        topic_path = self.publisher.topic_path(self.project_id, topic_name)
-        result = {
-            "status": "success",
-            "message": f"Topic deleted: {topic_path}",
-            "deleted_subscriptions": [],
-        }
+        topic_path = self.publisher.topic_path(self.project_id, topic_delete.topic_name)
+        deleted_subscriptions = []
+
+        # Primero, verificar si el tópico existe
+        try:
+            self.publisher.get_topic(request={"topic": topic_path})
+        except exceptions.NotFound:
+            return TopicDeleteResponse(
+                status="error",
+                message=f"Topic not found: {topic_path}",
+                deleted_subscriptions=None,
+            )
+
+        if topic_delete.delete_subscriptions:
+            for subscription_name in topic_delete.delete_subscriptions:
+                try:
+                    subscription_path = self.subscriber.subscription_path(
+                        self.project_id, subscription_name
+                    )
+                    self.subscriber.delete_subscription(
+                        request={"subscription": subscription_path}
+                    )
+                    deleted_subscriptions.append(
+                        SubscriptionDeleteResult(
+                            name=subscription_name,
+                            status="success",
+                            message=f"Subscription deleted: {subscription_name}",
+                        )
+                    )
+                except exceptions.NotFound:
+                    deleted_subscriptions.append(
+                        SubscriptionDeleteResult(
+                            name=subscription_name,
+                            status="error",
+                            message=f"Subscription not found: {subscription_name}",
+                        )
+                    )
+                except Exception as e:
+                    deleted_subscriptions.append(
+                        SubscriptionDeleteResult(
+                            name=subscription_name,
+                            status="error",
+                            message=f"Failed to delete subscription: {str(e)}",
+                        )
+                    )
 
         try:
-            if delete_subscriptions:
-                for subscription_name in delete_subscriptions:
-                    sub_result = self.delete_pubsub_subscription(subscription_name)
-                    result["deleted_subscriptions"].append(sub_result)
-
             self.publisher.delete_topic(request={"topic": topic_path})
-            return result
+            return TopicDeleteResponse(
+                status="success",
+                message=f"Topic deleted: {topic_path}",
+                deleted_subscriptions=(
+                    deleted_subscriptions if deleted_subscriptions else None
+                ),
+            )
         except Exception as e:
             error_message = f"Failed to delete topic: {str(e)}"
             logging.error(error_message)
-            if delete_subscriptions:
-                error_message += (
-                    f". Subscriptions affected: {result['deleted_subscriptions']}"
-                )
-            return {"status": "error", "message": error_message}
+            return TopicDeleteResponse(
+                status="error",
+                message=error_message,
+                deleted_subscriptions=(
+                    deleted_subscriptions if deleted_subscriptions else None
+                ),
+            )
 
-    def delete_pubsub_subscription(self, subscription_name: str) -> Dict[str, str]:
+    def delete_pubsub_subscription(
+        self, subscription_delete: SubscriptionDelete
+    ) -> PubSubBaseResponse:
         if not self.subscriber:
-            return {"status": "error", "message": "PubSub service not initialized"}
+            return PubSubBaseResponse(
+                status="error", message="PubSub service not initialized"
+            )
 
         subscription_path = self.subscriber.subscription_path(
-            self.project_id, subscription_name
+            self.project_id, subscription_delete.subscription_name
         )
 
         try:
             self.subscriber.delete_subscription(
                 request={"subscription": subscription_path}
             )
-            return {
-                "status": "success",
-                "message": f"Subscription deleted: {subscription_path}",
-            }
+            return PubSubBaseResponse(
+                status="success", message=f"Subscription deleted: {subscription_path}"
+            )
+        except exceptions.NotFound:
+            return PubSubBaseResponse(
+                status="error", message=f"Subscription not found: {subscription_path}"
+            )
         except Exception as e:
             error_message = f"Failed to delete subscription: {str(e)}"
             logging.error(error_message)
-            return {"status": "error", "message": error_message}
+            return PubSubBaseResponse(status="error", message=error_message)
 
-    def list_pubsub_topics(self) -> Dict[str, Any]:
+    def list_pubsub_topics(self) -> PubSubListResponse:
         if not self.publisher or not self.subscriber:
-            return {"status": "error", "message": "PubSub service not initialized"}
+            return PubSubListResponse(
+                status="error", message="PubSub service not initialized"
+            )
 
         project_path = f"projects/{self.project_id}"
 
@@ -111,38 +165,42 @@ class PubSubCreatorService:
             topics = list(self.publisher.list_topics(request={"project": project_path}))
 
             for topic in topics:
-                topic_dict = {
-                    "name": topic.name,
-                    "labels": dict(topic.labels),
-                    "subscriptions": self._list_topic_subscriptions(topic.name),
-                }
+                topic_dict = TopicList(
+                    name=topic.name,
+                    labels=dict(topic.labels),
+                    subscriptions=self._list_topic_subscriptions(topic.name),
+                )
                 topics_with_subscriptions.append(topic_dict)
 
-            return {"status": "success", "topics": topics_with_subscriptions}
+            return PubSubListResponse(
+                status="success", topics=topics_with_subscriptions
+            )
         except Exception as e:
             error_message = f"Failed to list topics: {str(e)}"
             logging.error(error_message)
-            return {"status": "error", "message": error_message}
+            return PubSubListResponse(status="error", message=error_message)
 
-    def get_pubsub_topic(self, topic_name: str) -> Dict[str, Any]:
+    def get_pubsub_topic(self, topic_name: str) -> PubSubTopicResponse:
         if not self.publisher or not self.subscriber:
-            return {"status": "error", "message": "PubSub service not initialized"}
+            return PubSubTopicResponse(
+                status="error", message="PubSub service not initialized"
+            )
 
         topic_path = self.publisher.topic_path(self.project_id, topic_name)
 
         try:
             topic = self.publisher.get_topic(request={"topic": topic_path})
 
-            topic_dict = {
-                "name": topic.name,
-                "labels": dict(topic.labels),
-                "message_storage_policy": {
+            topic_detail = TopicDetail(
+                name=topic.name,
+                labels=dict(topic.labels),
+                message_storage_policy={
                     "allowed_persistence_regions": list(
                         topic.message_storage_policy.allowed_persistence_regions
                     )
                 },
-                "kms_key_name": topic.kms_key_name,
-                "schema_settings": (
+                kms_key_name=topic.kms_key_name,
+                schema_settings=(
                     {
                         "schema": topic.schema_settings.schema,
                         "encoding": topic.schema_settings.encoding,
@@ -150,18 +208,18 @@ class PubSubCreatorService:
                     if topic.schema_settings
                     else None
                 ),
-                "satisfies_pzs": topic.satisfies_pzs,
-                "message_retention_duration": topic.message_retention_duration.seconds,
-                "subscriptions": self._list_topic_subscriptions(topic.name),
-            }
+                satisfies_pzs=topic.satisfies_pzs,
+                message_retention_duration=topic.message_retention_duration.seconds,
+                subscriptions=self._list_topic_subscriptions(topic.name),
+            )
 
-            return {"status": "success", "topic": topic_dict}
+            return PubSubTopicResponse(status="success", topic=topic_detail)
         except Exception as e:
-            error_message = f"Failed to get topics: {str(e)}"
+            error_message = f"Failed to get topic: {str(e)}"
             logging.error(error_message)
-            return {"status": "error", "message": error_message}
+            return PubSubTopicResponse(status="error", message=error_message)
 
-    def _list_topic_subscriptions(self, topic_name: str) -> List[Dict[str, Any]]:
+    def _list_topic_subscriptions(self, topic_name: str) -> List[Subscription]:
         try:
             subscriptions = self.publisher.list_topic_subscriptions(
                 request={"topic": topic_name}
@@ -172,17 +230,20 @@ class PubSubCreatorService:
                     request={"subscription": subscription_path}
                 )
                 subscription_details.append(
-                    {
-                        "name": sub.name,
-                        "push_config": (
+                    Subscription(
+                        name=sub.name,
+                        full_name=sub.name,
+                        push_config=(
                             {"push_endpoint": sub.push_config.push_endpoint}
                             if sub.push_config.push_endpoint
                             else None
                         ),
-                        "ack_deadline_seconds": sub.ack_deadline_seconds,
-                        "message_retention_duration": sub.message_retention_duration.seconds,
-                        "labels": dict(sub.labels),
-                    }
+                        ack_deadline_seconds=sub.ack_deadline_seconds,
+                        message_retention_duration=str(
+                            sub.message_retention_duration.seconds
+                        ),
+                        labels=dict(sub.labels),
+                    )
                 )
             return subscription_details
         except Exception as e:
@@ -192,138 +253,124 @@ class PubSubCreatorService:
             logging.error(error_message)
             return []
 
-    def update_pubsub_topic(
-        self,
-        topic_name: str,
-        labels: Optional[dict] = None,
-        message_retention_duration: Optional[str] = None,
-        add_subscription: Optional[dict] = None,
-        update_subscription: Optional[dict] = None,
-    ) -> dict[str, Any]:
+    def update_pubsub_topic(self, topic_update: TopicUpdate) -> TopicUpdateResponse:
         if not self.publisher or not self.subscriber:
-            return {"status": "error", "message": "PubSub service not initialized"}
+            return TopicUpdateResponse(
+                status="error", message="PubSub service not initialized", topic_path=""
+            )
 
-        topic_path = self.publisher.topic_path(self.project_id, topic_name)
+        topic_path = self.publisher.topic_path(self.project_id, topic_update.topic_name)
 
         try:
-            update_topic = pubsub_v1.types.Topic()
-            update_topic.name = topic_path
             update_mask = field_mask_pb2.FieldMask()
+            topic = pubsub_v1.types.Topic()
+            topic.name = topic_path
 
-            if labels is not None:
-                update_topic.labels.update(labels)
+            if topic_update.labels is not None:
+                topic.labels.update(topic_update.labels)
                 update_mask.paths.append("labels")
 
-            if message_retention_duration is not None:
-                duration = self._parse_duration(message_retention_duration)
+            if topic_update.message_retention_duration is not None:
+                duration = self._parse_duration(topic_update.message_retention_duration)
                 if duration:
-                    update_topic.message_retention_duration = duration
+                    topic.message_retention_duration = duration
                     update_mask.paths.append("message_retention_duration")
                 else:
-                    return {
-                        "status": "error",
-                        "message": "Invalid message_retention_duration format",
-                    }
+                    return TopicUpdateResponse(
+                        status="error",
+                        message="Invalid message_retention_duration format",
+                        topic_path=topic_path,
+                    )
+
+            result = TopicUpdateResponse(
+                status="success", message="", topic_path=topic_path
+            )
 
             if update_mask.paths:
                 updated_topic = self.publisher.update_topic(
-                    request={
-                        "topic": update_topic,
-                        "update_mask": update_mask,
-                    }
+                    request={"topic": topic, "update_mask": update_mask}
                 )
-                result = {
-                    "status": "success",
-                    "message": f"Topic updated: {updated_topic.name}",
-                    "topic_path": updated_topic.name,
-                }
+                result.message = f"Topic updated: {updated_topic.name}"
             else:
-                result = {
-                    "status": "success",
-                    "message": "No updates were necessary for the topic",
-                    "topic_path": topic_path,
-                }
+                result.message = "No updates were necessary for the topic"
 
-            if add_subscription:
+            if topic_update.add_subscription:
                 subscription_result = self._add_subscription(
-                    topic_path, add_subscription
+                    topic_path, topic_update.add_subscription
                 )
-                if subscription_result["status"] == "success":
-                    result["added_subscription"] = subscription_result["subscription"]
+                if subscription_result.status == "success":
+                    result.added_subscription = subscription_result.dict()
                 else:
-                    result["add_subscription_error"] = subscription_result["message"]
+                    result.add_subscription_error = subscription_result.message
 
-            if update_subscription:
+            if topic_update.update_subscription:
                 update_result = self._update_subscription(
-                    topic_path, update_subscription
+                    topic_path, topic_update.update_subscription
                 )
-                if update_result["status"] == "success":
-                    result["updated_subscription"] = update_result["subscription"]
+                if update_result.status == "success":
+                    result.updated_subscription = update_result.dict()
                 else:
-                    result["update_subscription_error"] = update_result["message"]
+                    result.update_subscription_error = update_result.message
 
             return result
 
         except Exception as e:
-            error_message = f"Failed to update topics: {str(e)}"
+            error_message = f"Failed to update topic: {str(e)}"
             logging.error(error_message)
-            return {"status": "error", "message": f"Failed to update topic: {str(e)}"}
-
-    def _update_subscription(
-        self, topic_path: str, subscription_config: dict
-    ) -> dict[str, Any]:
-        try:
-            subscription_name = subscription_config.get("name")
-            if not subscription_name:
-                return {"status": "error", "message": "Subscription name is required"}
-
-            subscription_path = self.subscriber.subscription_path(
-                self.project_id, subscription_name
+            return TopicUpdateResponse(
+                status="error", message=error_message, topic_path=topic_path
             )
 
-            # Crear máscara de actualización y objeto de suscripción
+    def _update_subscription(
+        self, topic_path: str, subscription_config: SubscriptionConfig
+    ) -> PubSubResponse:
+        try:
+            subscription_path = self.subscriber.subscription_path(
+                self.project_id, subscription_config.name
+            )
+
             update_mask = field_mask_pb2.FieldMask()
             subscription = pubsub_v1.types.Subscription()
             subscription.name = subscription_path
 
-            if "ack_deadline_seconds" in subscription_config:
-                subscription.ack_deadline_seconds = subscription_config[
-                    "ack_deadline_seconds"
-                ]
+            if subscription_config.ack_deadline_seconds is not None:
+                subscription.ack_deadline_seconds = (
+                    subscription_config.ack_deadline_seconds
+                )
                 update_mask.paths.append("ack_deadline_seconds")
 
-            if "retain_acked_messages" in subscription_config:
-                subscription.retain_acked_messages = subscription_config[
-                    "retain_acked_messages"
-                ]
+            if subscription_config.retain_acked_messages is not None:
+                subscription.retain_acked_messages = (
+                    subscription_config.retain_acked_messages
+                )
                 update_mask.paths.append("retain_acked_messages")
 
-            if "message_retention_duration" in subscription_config:
+            if subscription_config.message_retention_duration:
                 duration = self._parse_duration(
-                    subscription_config["message_retention_duration"]
+                    subscription_config.message_retention_duration
                 )
                 if duration:
                     subscription.message_retention_duration = duration
                     update_mask.paths.append("message_retention_duration")
 
-            if "labels" in subscription_config:
-                subscription.labels.update(subscription_config["labels"])
+            if subscription_config.labels:
+                subscription.labels.update(subscription_config.labels)
                 update_mask.paths.append("labels")
 
-            if "push_endpoint" in subscription_config:
+            if subscription_config.push_endpoint:
                 subscription.push_config = pubsub_v1.types.PushConfig(
-                    push_endpoint=subscription_config["push_endpoint"]
+                    push_endpoint=subscription_config.push_endpoint
                 )
                 update_mask.paths.append("push_config")
 
-            # Actualizar la suscripción
             updated_subscription = self.subscriber.update_subscription(
                 request={"subscription": subscription, "update_mask": update_mask}
             )
 
-            return {
-                "status": "success",
-                "subscription": {
+            return PubSubResponse(
+                status="success",
+                message=f"Subscription updated: {updated_subscription.name}",
+                subscription={
                     "name": updated_subscription.name,
                     "topic": updated_subscription.topic,
                     "push_config": (
@@ -333,17 +380,16 @@ class PubSubCreatorService:
                     ),
                     "ack_deadline_seconds": updated_subscription.ack_deadline_seconds,
                     "retain_acked_messages": updated_subscription.retain_acked_messages,
-                    "message_retention_duration": updated_subscription.message_retention_duration.seconds,
+                    "message_retention_duration": str(
+                        updated_subscription.message_retention_duration.seconds
+                    ),
                     "labels": dict(updated_subscription.labels),
                 },
-            }
+            )
         except Exception as e:
-            error_message = f"Failed to update subscription: {str(e)}"
-            logging.error(error_message)
-            return {
-                "status": "error",
-                "message": error_message,
-            }
+            return PubSubResponse(
+                status="error", message=f"Failed to update subscription: {str(e)}"
+            )
 
     def _parse_duration(self, duration_str: str) -> Optional[duration_pb2.Duration]:
         """Parse a duration string into a Duration object."""
@@ -356,48 +402,45 @@ class PubSubCreatorService:
         return duration_pb2.Duration(seconds=seconds)
 
     def _add_subscription(
-        self, topic_path: str, subscription_config: dict
-    ) -> dict[str, Any]:
+        self, topic_path: str, subscription_config: SubscriptionConfig
+    ) -> PubSubResponse:
         try:
-            subscription_name = subscription_config.get("name")
-            if not subscription_name:
-                return {"status": "error", "message": "Subscription name is required"}
-
             subscription_path = self.subscriber.subscription_path(
-                self.project_id, subscription_name
+                self.project_id, subscription_config.name
             )
 
-            # Configuración de suscripción
             subscription_settings = {
                 "name": subscription_path,
                 "topic": topic_path,
-                "ack_deadline_seconds": subscription_config.get(
-                    "ack_deadline_seconds", 10
-                ),
-                "retain_acked_messages": subscription_config.get(
-                    "retain_acked_messages", False
-                ),
-                "message_retention_duration": self._parse_duration(
-                    subscription_config.get("message_retention_duration", "7d")
-                ),
-                "labels": subscription_config.get("labels", {}),
             }
 
-            # Configuración de Push si se proporciona
-            push_endpoint = subscription_config.get("push_endpoint")
-            if push_endpoint:
+            if subscription_config.ack_deadline_seconds is not None:
+                subscription_settings["ack_deadline_seconds"] = (
+                    subscription_config.ack_deadline_seconds
+                )
+            if subscription_config.retain_acked_messages is not None:
+                subscription_settings["retain_acked_messages"] = (
+                    subscription_config.retain_acked_messages
+                )
+            if subscription_config.message_retention_duration:
+                subscription_settings["message_retention_duration"] = (
+                    self._parse_duration(subscription_config.message_retention_duration)
+                )
+            if subscription_config.labels:
+                subscription_settings["labels"] = subscription_config.labels
+            if subscription_config.push_endpoint:
                 subscription_settings["push_config"] = pubsub_v1.types.PushConfig(
-                    push_endpoint=push_endpoint
+                    push_endpoint=subscription_config.push_endpoint
                 )
 
-            # Crear la suscripción
             subscription = self.subscriber.create_subscription(
                 request=subscription_settings
             )
 
-            return {
-                "status": "success",
-                "subscription": {
+            return PubSubResponse(
+                status="success",
+                message=f"Subscription added: {subscription.name}",
+                subscription={
                     "name": subscription.name,
                     "topic": subscription.topic,
                     "push_config": (
@@ -407,14 +450,13 @@ class PubSubCreatorService:
                     ),
                     "ack_deadline_seconds": subscription.ack_deadline_seconds,
                     "retain_acked_messages": subscription.retain_acked_messages,
-                    "message_retention_duration": subscription.message_retention_duration.seconds,
+                    "message_retention_duration": str(
+                        subscription.message_retention_duration.seconds
+                    ),
                     "labels": dict(subscription.labels),
                 },
-            }
+            )
         except Exception as e:
-            error_message = f"Failed to add subscription: {str(e)}"
-            logging.error(error_message)
-            return {
-                "status": "error",
-                "message": error_message,
-            }
+            return PubSubResponse(
+                status="error", message=f"Failed to add subscription: {str(e)}"
+            )

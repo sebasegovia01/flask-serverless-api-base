@@ -3,3 +3,4 @@ functions-framework==3.*
 serverless-wsgi
 google-cloud-pubsub==2.*
 python-dotenv
+pydantic
