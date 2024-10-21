@@ -29,6 +29,7 @@ class SubscriptionConfig(BaseModel):
     retain_acked_messages: Optional[bool] = None
     message_retention_duration: Optional[str] = None
     labels: Optional[Dict[str, str]] = None
+    filter: Optional[str] = None
 
 
 class TopicUpdate(BaseModel):
@@ -45,6 +46,7 @@ class Subscription(BaseModel):
     ack_deadline_seconds: int
     message_retention_duration: str
     labels: Dict[str, str]
+    filter: Optional[str] = None
 
 
 class Topic(BaseModel):
@@ -107,6 +109,7 @@ class SubscriptionUpdate(BaseModel):
     message_retention_duration: Optional[str] = None
     labels: Optional[Dict[str, str]] = None
     push_endpoint: Optional[str] = None
+    filter: Optional[str] = None
 
 
 class TopicDetail(BaseModel):

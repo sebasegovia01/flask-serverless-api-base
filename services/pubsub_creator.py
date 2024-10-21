@@ -305,7 +305,7 @@ class PubSubCreatorService:
 
             if topic_update.update_subscription:
                 update_result = self._update_subscription(
-                    topic_path, topic_update.update_subscription
+                    topic_update.update_subscription
                 )
                 if update_result.status == "success":
                     result.updated_subscription = update_result.dict()
@@ -322,7 +322,7 @@ class PubSubCreatorService:
             )
 
     def _update_subscription(
-        self, topic_path: str, subscription_config: SubscriptionConfig
+        self, subscription_config: SubscriptionConfig
     ) -> PubSubResponse:
         try:
             subscription_path = self.subscriber.subscription_path(
@@ -363,6 +363,10 @@ class PubSubCreatorService:
                 )
                 update_mask.paths.append("push_config")
 
+            if subscription_config.filter is not None:
+                subscription.filter = subscription_config.filter
+                update_mask.paths.append("filter")
+
             updated_subscription = self.subscriber.update_subscription(
                 request={"subscription": subscription, "update_mask": update_mask}
             )
@@ -384,6 +388,7 @@ class PubSubCreatorService:
                         updated_subscription.message_retention_duration.seconds
                     ),
                     "labels": dict(updated_subscription.labels),
+                    "filter": updated_subscription.filter,
                 },
             )
         except Exception as e:
@@ -433,6 +438,9 @@ class PubSubCreatorService:
                     push_endpoint=subscription_config.push_endpoint
                 )
 
+            if subscription_config.filter:
+                subscription_settings["filter"] = subscription_config.filter
+
             subscription = self.subscriber.create_subscription(
                 request=subscription_settings
             )
@@ -454,6 +462,7 @@ class PubSubCreatorService:
                         subscription.message_retention_duration.seconds
                     ),
                     "labels": dict(subscription.labels),
+                    "filter": subscription.filter,
                 },
             )
         except Exception as e:
