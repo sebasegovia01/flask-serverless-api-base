@@ -30,7 +30,7 @@ class PubSubCreatorService:
     @retry.Retry()
     def create_pubsub_topic(self, topic_create: TopicCreate) -> TopicCreateResponse:
         topic_path = self.publisher.topic_path(
-            topic_create.project_id, topic_create.topic_name
+            self.project_id, topic_create.topic_name
         )
 
         try:

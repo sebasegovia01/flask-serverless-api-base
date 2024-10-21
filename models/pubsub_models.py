@@ -9,7 +9,6 @@ class PubSubCredentials(BaseModel):
 
 
 class TopicCreate(BaseModel):
-    project_id: str
     topic_name: str
     labels: Optional[Dict[str, str]] = Field(default_factory=dict)
 
